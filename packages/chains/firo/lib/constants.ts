@@ -10,7 +10,7 @@ export const FIRO_OUTPUT_SIZE = 34; // Typical Firo output size in bytes
 export const MINIMUM_UTXO_VALUE = 1000000n; // Minimum Firo UTXO value in satoshis
 export const FIRO_NETWORK = {
   // Firo network parameters
-  messagePrefix: '\x18Firo Signed Message:\n',
+  messagePrefix: '\x18Firocoin Signed Message:\n',
   bech32: 'firo',
   bip32: {
     public: 0x0488b21e,

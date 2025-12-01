@@ -3,6 +3,8 @@ import { AbstractLogger } from '@rosen-bridge/abstract-logger';
 import { TransactionType } from '@rosen-chains/abstract-chain';
 import JsonBigInt from '@rosen-bridge/json-bigint';
 import { FiroConfigs, TssSignFunction } from '../lib/types';
+import { Psbt, payments } from 'bitcoinjs-lib';
+import { FIRO_NETWORK } from '../lib/constants';
 
 export const testFiroConfigs: FiroConfigs = {
   fee: 1000n,
@@ -83,11 +85,9 @@ export const MOCK_VALUES = {
   CHAIN: 'firo',
   NATIVE_TOKEN_ID: 'firo',
   defaultNativeToken: 1000000000n, // 10 FIRO
-  lockAddressBalance: 10000000000n, // 100 FIRO - plenty for tests
-  tokenAmount: 100000000n, // 1 FIRO
-  feeRatio: 1000,
+  lockAddressBalance: 10000000000n, // 100 FIRO
+  feeRatio: 1000n,
   txHex: '0200000001...',
-  largeAmount: 999999900000000n, // Very large amount for insufficient assets test
 };
 
 // Test transaction IDs and event IDs - using realistic Firo transaction patterns
@@ -107,8 +107,19 @@ export const TEST_IDS = {
   verifyConditionsTx: 'verify-conditions-tx',
   lockTxTest: 'lock-tx-test',
   // Real Firo network transaction ID for testing
-  realFiroTxId: '98f7ecc5b17fa795ceb45809918e726d50a42fdb9207f40d8a0fe0dcf0f57b70',
+  realFiroTxId: '462d8f9ab8cf8ed3f26910b39cdbaec6ebb4cbcccb8cc76552b21fb5805baf4d',
 };
+
+export const transaction2PaymentTransaction = `{
+  "network": "firo",
+  "eventId": "",
+  "txBytes": [112, 115, 98, 116, 255, 1, 0, 85, 2, 0, 0, 0, 1, 241, 43, 240, 89, 245, 125, 246, 223, 6, 211, 107, 111, 14, 119, 158, 220, 66, 12, 22, 173, 126, 203, 230, 228, 200, 111, 30, 109, 164, 78, 123, 168, 0, 0, 0, 0, 0, 255, 255, 255, 255, 1, 152, 146, 152, 0, 0, 0, 0, 0, 25, 118, 169, 20, 74, 202, 121, 116, 179, 176, 102, 91, 154, 243, 123, 150, 131, 83, 71, 33, 53, 215, 177, 216, 136, 172, 0, 0, 0, 0, 0, 1, 1, 34, 128, 150, 152, 0, 0, 0, 0, 0, 25, 118, 169, 20, 74, 202, 121, 116, 179, 176, 102, 91, 154, 243, 123, 150, 131, 83, 71, 33, 53, 215, 177, 216, 136, 172, 0, 0],
+  "txId": "462d8f9ab8cf8ed3f26910b39cdbaec6ebb4cbcccb8cc76552b21fb5805baf4d",
+  "txType": "payment",
+  "inputUtxos": [
+    "{\\"txId\\":\\"a87b4ea46d1e6fc8e4e6cb7ead160c42dc9e770e6f6bd306dff67df559f02bf1\\",\\"index\\":0,\\"value\\":10000000}"
+  ]
+}`;
 
 export const REAL_PSBT_DATA = {
   // Valid PSBT transaction with proper structure that can be parsed
@@ -157,6 +168,33 @@ export const MOCK_TRANSACTION_BYTES = {
   // Test PSBT hex for rawTxToPaymentTransaction test
   testPsbtHex: VALID_PSBT_HEX,
 };
+
+// Finalized (signed) PSBT for testing
+// This is created by taking the unsigned PSBT and manually finalizing it
+const createFinalizedPsbt = (): Uint8Array => {
+  const psbt = Psbt.fromHex(VALID_PSBT_HEX, { network: FIRO_NETWORK });
+  
+  // Mock finalize the inputs by adding dummy scriptSig
+  for (let i = 0; i < psbt.data.inputs.length; i++) {
+    // Add a minimal valid scriptSig (OP_0 - represents a signed input)
+    psbt.updateInput(i, {
+      finalScriptSig: Buffer.from([0x00]) // Minimal valid script
+    });
+  }
+  
+  return psbt.toBuffer();
+};
+
+const SIGNED_PSBT_BYTES = createFinalizedPsbt();
+
+export const transactionSignedPaymentTransaction = JSON.stringify({
+  network: 'firo',
+  eventId: 'signed-test-event',
+  txBytes: Array.from(SIGNED_PSBT_BYTES).map(b => b.toString(16).padStart(2, '0')).join(''),
+  txId: '50e0c692c976a3e52dc20f43c6fd9ab0896f17faf0beec18ec4e2dea026ec999',
+  txType: 0, // TransactionType.payment
+  inputUtxos: ["f12bf059f57df6df06d36b6f0e779edc420c16ad7ecbe6e4c86f1e6da44e7ba8.0"]
+});
 
 // Mock signatures for TSS tests
 export const MOCK_SIGNATURES = {
@@ -241,14 +279,14 @@ export const createMockNetworkForMempool = (inMempool: boolean = true) => {
 
 // Factory function to create mock token map
 export const createMockTokenMap = () => ({
-  wrapAmount: vi.fn().mockReturnValue({ 
-    amount: MOCK_VALUES.tokenAmount, 
+  wrapAmount: vi.fn().mockImplementation((tokenId: string, amount: bigint, chain: string) => ({ 
+    amount: amount,
     token: MOCK_VALUES.CHAIN 
-  }),
-  unwrapAmount: vi.fn().mockReturnValue({ 
-    amount: MOCK_VALUES.tokenAmount, 
+  })),
+  unwrapAmount: vi.fn().mockImplementation((tokenId: string, amount: bigint, chain: string) => ({ 
+    amount: amount,
     token: MOCK_VALUES.CHAIN 
-  }),
+  })),
   search: vi.fn(),
   getID: vi.fn().mockReturnValue(MOCK_VALUES.CHAIN),
   getTokenName: vi.fn(),
@@ -262,193 +300,16 @@ export const createMockLogger = (): AbstractLogger => ({
   debug: vi.fn(),
 }) as any;
 
-// Factory function to create mock TSS sign function
-export const createMockTssSignFunction = (): TssSignFunction => 
-  vi.fn().mockResolvedValue({
-    signature: MOCK_SIGNATURES.signature,
-    signatureRecovery: MOCK_SIGNATURES.signatureRecovery,
-  });
-
-// Test order for insufficient assets test
-export const createLargeOrder = (testAddress: string) => [{
-  address: testAddress,
-  assets: {
-    nativeToken: MOCK_VALUES.largeAmount,
-    tokens: []
-  }
-}];
-
-// Mock transaction JSON for PaymentTransactionFromJson test
-export const createMockTransactionJson = () => JSON.stringify({
-  txId: TEST_IDS.jsonTxId,
-  eventId: TEST_IDS.eventId,
-  txBytes: [1, 2, 3, 4],
-  txType: TransactionType.payment,
-  inputUtxos: []
-});
-
-// Skip messages for various test scenarios
-export const SKIP_MESSAGES = {
-  complexMocking: 'Skipped: requires complex asset balance mocking',
-  validPsbtBytes: 'Skipped: requires valid PSBT bytes',
-  validTransactionBytes: 'Skipped: requires valid PSBT transaction bytes',
-};
-
-// Factory for creating realistic payment orders
-export const createMockPaymentOrder = (recipient?: string, amount?: bigint) => ({
-  address: recipient || realFiroAddresses.testAddress,
-  assets: {
-    nativeToken: amount || 900000000n, // 9 FIRO
-    tokens: []
-  }
-});
-
-// Factory for creating large payment orders (for insufficient assets test)
-export const createLargePaymentOrder = () => ({
-  address: realFiroAddresses.testAddress,
-  assets: {
-    nativeToken: MOCK_VALUES.largeAmount, // Extremely large amount
-    tokens: []
-  }
-});
-
-// Factory for creating cold storage orders
-export const createColdStorageOrder = () => ({
-  address: testFiroConfigs.addresses.cold,
-  assets: {
-    nativeToken: 1000000000n, // 10 FIRO
-    tokens: []
-  }
-});
-
-// Mock realistic transaction creation data
-export const createMockTransactionData = () => ({
-  eventId: 'realistic-event-' + Date.now(),
-  order: [createMockPaymentOrder()],
-  unsignedTx: MOCK_TRANSACTION_BYTES.validPsbt,
-  txType: TransactionType.payment
-});
-
-// Factory functions for creating FiroTransaction instances with realistic data
-export const createMockFiroTransaction = (txId?: string, eventId?: string, bytes?: Uint8Array) => ({
-  txId: txId || TEST_IDS.txId,
-  eventId: eventId || TEST_IDS.eventId,
-  txBytes: bytes || MOCK_TRANSACTION_BYTES.simple,
-  txType: TransactionType.payment,
-  inputUtxos: [JsonBigInt.stringify(testUtxos[0])]
-});
-
-// Factory for creating mock transaction for various test scenarios
-export const createTestTransactionData = {
-  validUnspent: () => ({
-    txId: TEST_IDS.validUnspentTx,
-    eventId: 'validation-event',
-    txBytes: MOCK_TRANSACTION_BYTES.validPsbt,
-    txType: TransactionType.payment,
-    inputUtxos: [JsonBigInt.stringify(largeTestUtxos[0])]
-  }),
-  spentInputs: () => ({
-    txId: TEST_IDS.spentInputsTx,
-    eventId: 'validation-event',
-    txBytes: MOCK_TRANSACTION_BYTES.validPsbt,
-    txType: TransactionType.payment,
-    inputUtxos: [JsonBigInt.stringify(largeTestUtxos[1])]
-  }),
-  feeVerification: () => ({
-    txId: TEST_IDS.feeVerificationTx,
-    eventId: 'fee-event',
-    txBytes: MOCK_TRANSACTION_BYTES.validPsbt,
-    txType: TransactionType.payment,
-    inputUtxos: [JsonBigInt.stringify(largeTestUtxos[0])]
-  }),
-  unsignedSigning: () => ({
-    txId: TEST_IDS.unsignedSigningTx,
-    eventId: 'signing-event',
-    txBytes: MOCK_TRANSACTION_BYTES.validPsbt,
-    txType: TransactionType.payment,
-    inputUtxos: [JsonBigInt.stringify(largeTestUtxos[0])]
-  }),
-  signed: () => ({
-    txId: TEST_IDS.signedTx,
-    eventId: 'signing-event',
-    txBytes: MOCK_TRANSACTION_BYTES.signedPsbt,
-    txType: TransactionType.payment,
-    inputUtxos: [JsonBigInt.stringify(largeTestUtxos[0])]
-  }),
-  extractTest: () => ({
-    txId: TEST_IDS.extractTestTx,
-    eventId: 'extract-event',
-    txBytes: MOCK_TRANSACTION_BYTES.simple,
-    txType: TransactionType.payment,
-    inputUtxos: []
-  }),
-  noBurnTest: () => ({
-    txId: TEST_IDS.noBurnTestTx,
-    eventId: 'no-burn-event',
-    txBytes: MOCK_TRANSACTION_BYTES.simple,
-    txType: TransactionType.payment,
-    inputUtxos: []
-  }),
-  verifyConditions: () => ({
-    txId: TEST_IDS.verifyConditionsTx,
-    eventId: 'verify-event',
-    txBytes: MOCK_TRANSACTION_BYTES.simple,
-    txType: TransactionType.payment,
-    inputUtxos: []
-  })
-};
-
-// Mock transaction JSON for specific test cases
-export const createMockTransactionForAssets = () => ({
-  txId: TEST_IDS.txId,
-  eventId: TEST_IDS.eventId,
-  txBytes: MOCK_TRANSACTION_BYTES.simple,
-  txType: TransactionType.payment,
-  inputUtxos: [JsonBigInt.stringify(testUtxos[0])]
-});
-
-// Mock signing functions for transaction signing tests
-export const createMockTssSigningFunction = () => vi.fn().mockResolvedValue({
-  signature: MOCK_SIGNATURES.signature,
-  signatureRecovery: MOCK_SIGNATURES.signatureRecovery
-});
-
-// Mock box ID test data
-export const createTestBoxData = () => ({
-  txId: TEST_IDS.realFiroTxId,
-  index: 1,
-  value: BigInt(200000000),
-  expectedBoxId: `${TEST_IDS.realFiroTxId}.1`
-});
-
-// Integration test data for real Firo network patterns
-export const createRealNetworkTestData = () => ({
-  addresses: {
-    real: 'aMi6JC7tb8LJbsf3DikYa6awC5RN733oV8',
-    pattern: /^a[1-9A-HJ-NP-Za-km-z]{33}/
-  },
-  transactions: {
-    real: TEST_IDS.realFiroTxId,
-    pattern: /^[a-f0-9]{64}$/
-  },
-  amounts: [
-    BigInt(4000000000), // 40 FIRO (coinbase reward)
-    BigInt(200000000),  // 2 FIRO  
-    BigInt(150000000),  // 1.5 FIRO
-    BigInt(100000000),  // 1 FIRO
-  ]
-});
-
 // Mock network for transaction generation tests
 export const createMockNetworkForTransactionGeneration = () => ({
   getHeight: vi.fn().mockResolvedValue(742100),
   getTxConfirmation: vi.fn().mockResolvedValue(10),
   getAddressAssets: vi.fn().mockResolvedValue({ 
-    nativeToken: 5000000000n, // 50 FIRO (enough for most tests)
+    nativeToken: 5000000000n, // 50 FIRO
     tokens: [] 
   }),
   getAddressBoxes: vi.fn().mockResolvedValue(largeTestUtxos),
-  isBoxUnspentAndValid: vi.fn().mockResolvedValue(true), // Add missing method
+  isBoxUnspentAndValid: vi.fn().mockResolvedValue(true),
   getFeeRatio: vi.fn().mockResolvedValue(MOCK_VALUES.feeRatio),
   getTokenDetail: vi.fn().mockResolvedValue(null),
   isTxInMempool: vi.fn().mockResolvedValue(false),
@@ -472,10 +333,30 @@ export const createMockNetworkForTransactionGeneration = () => ({
   rawTxToJsonTx: vi.fn().mockResolvedValue({}),
   getTransaction: vi.fn().mockResolvedValue({
     txId: '98f7ecc5b17fa795ceb45809918e726d50a42fdb9207f40d8a0fe0dcf0f57b70',
-    hex: '01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1803510a2f503253482f045f1064650c2f6d696e696e67636f72652f000000000600e4e1c9000000001976a914e01ba8d0b76671b3fb5ccef7ba52cec4d7b65ecd88ac',
+    hex: '02000000010000000000000000000000000000000000000000000000000000000000000000ffffffff025100ffffffff0100f2052a010000001976a914e01ba8d0b76671b3fb5ccef7ba52cec4d7b65ecd88ac00000000',
   }),
   getBlockTransactionIds: vi.fn().mockResolvedValue([
     '98f7ecc5b17fa795ceb45809918e726d50a42fdb9207f40d8a0fe0dcf0f57b70'
   ]),
+  getTransactionHex: vi.fn().mockImplementation((txId: string) => {
+    if (txId === '98f7ecc5b17fa795ceb45809918e726d50a42fdb9207f40d8a0fe0dcf0f57b70') {
+      return Promise.resolve('02000000010000000000000000000000000000000000000000000000000000000000000000ffffffff025100ffffffff0100f2052a010000001976a914e01ba8d0b76671b3fb5ccef7ba52cec4d7b65ecd88ac00000000');
+    }
+    if (txId === 'f12bf059f57df6df06d36b6f0e779edc420c16ad7ecbe6e4c86f1e6da44e7ba8') {
+      return Promise.resolve('02000000010000000000000000000000000000000000000000000000000000000000000000ffffffff025100ffffffff0100969800000000001976a914880b0a854c3b5f23d208a9378064232a32067d7188ac00000000');
+    }
+    return Promise.reject(new Error('Transaction not found'));
+  }),
 });
+
+// Payment order for transaction generation tests
+export const transaction2Order = [
+  {
+    address: realFiroAddresses.testAddress,
+    assets: {
+      nativeToken: 900000000n, // 9 FIRO
+      tokens: []
+    }
+  }
+];
 

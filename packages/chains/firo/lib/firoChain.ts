@@ -204,29 +204,31 @@ class FiroChain extends AbstractUtxoChain<FiroTx, FiroUtxo> {
       );
     }
 
-    // add inputs
-    const psbt = new Psbt({ network: FIRO_NETWORK });
+    // Fetch transaction hex for boxes not in txToHex map
     for (const box of coveredBoxes.boxes) {
       if (!txToHex[box.txId]) {
         txToHex[box.txId] = await this.network.getTransactionHex(box.txId);
       }
-      psbt.addInput({
-        hash: box.txId,
-        index: box.index,
-        nonWitnessUtxo: Buffer.from(txToHex[box.txId], 'hex'),
-      });
     }
-    // calculate input boxes assets
-    let remainingFiro = coveredBoxes.boxes.reduce((a, b) => a + b.value, 0n);
-    this.logger.debug(`Input FIRO: ${remainingFiro}`);
 
-    // add outputs
-    order.forEach((order) => {
-      if (order.extra) {
-        throw Error('Firo does not support extra data in payment order');
-      }
-      if (order.assets.tokens.length) {
-        throw Error('Firo does not support tokens in payment order');
+    // Add inputs
+    const txInputs = coveredBoxes.boxes.map((box) => ({
+      hash: box.txId,
+      index: box.index,
+      nonWitnessUtxo: Buffer.from(txToHex[box.txId], 'hex'),
+    }));
+
+    // Calculate total FIRO available from inputs
+    const totalFiro = coveredBoxes.boxes.reduce(
+      (sum, box) => sum + box.value,
+      0n,
+    );
+    let remainingFiro = totalFiro;
+
+    // Add outputs
+    const txOutputs = order.map((order) => {
+      if (order.extra || order.assets.tokens.length) {
+        throw Error('Firo does not support extra data or tokens in payment order');
       }
       const orderFiro = this.unwrapFiro(order.assets.nativeToken).amount;
 
@@ -234,29 +236,51 @@ class FiroChain extends AbstractUtxoChain<FiroTx, FiroUtxo> {
       remainingFiro -= orderFiro;
 
       // create order output
-      psbt.addOutput({
+      return {
         script: address.toOutputScript(order.address, FIRO_NETWORK),
         value: Number(orderFiro),
-      });
+      };
     });
 
-    // create change output
-    this.logger.debug(`Remaining FIRO: ${remainingFiro}`);
+    // Add change output
     const estimatedFee = estimateTxFee(
-      psbt.txInputs.length,
-      psbt.txOutputs.length + 1,
+      txInputs.length,
+      txOutputs.length + 1,
       feeRatio,
     );
-    this.logger.debug(`Estimated Fee: ${estimatedFee}`);
     remainingFiro -= estimatedFee;
-    psbt.addOutput({
-      script: Buffer.from(this.lockScript, 'hex'),
-      value: Number(remainingFiro),
-    });
 
-    // create the transaction
-    const txId = Transaction.fromBuffer(psbt.data.getTransaction()).getId();
+    // Create PSBT
+    const psbt = new Psbt({ network: FIRO_NETWORK });
+
+    // Add inputs to PSBT
+    for (const input of txInputs) {
+      psbt.addInput({
+        hash: input.hash,
+        index: input.index,
+        nonWitnessUtxo: input.nonWitnessUtxo,
+      });
+    }
+
+    // Add outputs to PSBT
+    for (const output of txOutputs) {
+      psbt.addOutput({
+        address: address.fromOutputScript(output.script, FIRO_NETWORK),
+        value: output.value,
+      });
+    }
+
+    // Add change output
+    if (remainingFiro > BigInt(MINIMUM_UTXO_VALUE)) {
+      psbt.addOutput({
+        address: this.configs.addresses.lock,
+        value: Number(remainingFiro),
+      });
+    }
+
+    // Serialize PSBT
     const txBytes = Serializer.serialize(psbt);
+    const txId = Transaction.fromBuffer(psbt.data.getTransaction()).getId();
 
     const firoTx = new FiroTransaction(
       txId,
@@ -401,7 +425,6 @@ class FiroChain extends AbstractUtxoChain<FiroTx, FiroUtxo> {
       tx.outs.length,
       await this.network.getFeeRatio(),
     );
-
     const feeDifferencePercent = Math.abs(
       (Number(fee - estimatedFee) * 100) / Number(fee),
     );
@@ -536,13 +559,6 @@ class FiroChain extends AbstractUtxoChain<FiroTx, FiroUtxo> {
   };
 
   /**
-   * gets the box id
-   * @param box the box
-   * @returns the box id
-   */
-  protected getBoxId = (box: FiroUtxo): string => box.txId + '.' + box.index;
-
-  /**
    * verifies additional conditions for a FiroTransaction
    * - check change box
    * @param transaction the PaymentTransaction
@@ -652,20 +668,75 @@ class FiroChain extends AbstractUtxoChain<FiroTx, FiroUtxo> {
   };
 
   /**
+   * verifies consistency within the PaymentTransaction object
+   * @param transaction the PaymentTransaction
+   * @returns true if the transaction is verified
+   */
+  verifyPaymentTransaction = async (
+    transaction: PaymentTransaction,
+  ): Promise<boolean> => {
+    const psbt = Serializer.deserialize(transaction.txBytes);
+    const firoTx = transaction as FiroTransaction;
+    const baseError = `Tx [${transaction.txId}] is not verified: `;
+
+    // verify txId
+    const txId = Transaction.fromBuffer(psbt.data.getTransaction()).getId();
+    if (transaction.txId !== txId) {
+      this.logger.warn(
+        baseError +
+          `Transaction id is inconsistent (expected [${transaction.txId}] found [${txId}])`,
+      );
+      return false;
+    }
+
+    // verify inputUtxos
+    if (firoTx.inputUtxos.length !== psbt.inputCount) {
+      this.logger.warn(
+        baseError +
+          `FiroTransaction object input counts is inconsistent [${firoTx.inputUtxos.length} != ${psbt.inputCount}]`,
+      );
+      return false;
+    }
+    for (let i = 0; i < psbt.inputCount; i++) {
+      const input = psbt.txInputs[i];
+      const txId = Buffer.from(input.hash).reverse().toString('hex');
+      const actualInputId = `${txId}.${input.index}`;
+      const firoInput = JsonBigInt.parse(firoTx.inputUtxos[i]) as FiroUtxo;
+      const expectedId = `${firoInput.txId}.${firoInput.index}`;
+      if (expectedId !== actualInputId) {
+        this.logger.warn(
+          baseError +
+            `Utxo id for input at index [${i}] is inconsistent [expected ${expectedId} found ${actualInputId}]`,
+        );
+        return false;
+      }
+    }
+
+    return true;
+  };
+
+  /**
    * serializes a FiroTx to string
    * @param tx the Firo transaction
    * @returns the serialized transaction string
    */
-  serializeTx = (tx: FiroTx): string => {
-    return JSON.stringify(tx);
+  protected serializeTx = (tx: FiroTx): string => {
+    return JsonBigInt.stringify(tx);
   };
-
+  
   /**
    * wraps firo amount
    * @param amount
    */
   protected wrapFiro = (amount: bigint): RosenAmount =>
     this.tokenMap.wrapAmount(this.NATIVE_TOKEN_ID, amount, this.CHAIN);
+
+  /**
+   * gets the box id
+   * @param box the box
+   * @returns the box id
+   */
+  protected getBoxId = (box: FiroUtxo): string => box.txId + '.' + box.index;
 
   /**
    * unwraps firo amount
@@ -739,54 +810,6 @@ class FiroChain extends AbstractUtxoChain<FiroTx, FiroUtxo> {
     });
 
     return trackMap;
-  };
-
-  /**
-   * verifies consistency within the PaymentTransaction object
-   * @param transaction the PaymentTransaction
-   * @returns true if the transaction is verified
-   */
-  verifyPaymentTransaction = async (
-    transaction: PaymentTransaction,
-  ): Promise<boolean> => {
-    const psbt = Serializer.deserialize(transaction.txBytes);
-    const firoTx = transaction as FiroTransaction;
-    const baseError = `Tx [${transaction.txId}] is not verified: `;
-
-    // verify txId
-    const txId = Transaction.fromBuffer(psbt.data.getTransaction()).getId();
-    if (transaction.txId !== txId) {
-      this.logger.warn(
-        baseError +
-          `Transaction id is inconsistent (expected [${transaction.txId}] found [${txId}])`,
-      );
-      return false;
-    }
-
-    // verify inputUtxos
-    if (firoTx.inputUtxos.length !== psbt.inputCount) {
-      this.logger.warn(
-        baseError +
-          `FiroTransaction object input counts is inconsistent [${firoTx.inputUtxos.length} != ${psbt.inputCount}]`,
-      );
-      return false;
-    }
-    for (let i = 0; i < psbt.inputCount; i++) {
-      const input = psbt.txInputs[i];
-      const txId = Buffer.from(input.hash).reverse().toString('hex');
-      const actualInputId = `${txId}.${input.index}`;
-      const firoInput = JsonBigInt.parse(firoTx.inputUtxos[i]) as FiroUtxo;
-      const expectedId = `${firoInput.txId}.${firoInput.index}`;
-      if (expectedId !== actualInputId) {
-        this.logger.warn(
-          baseError +
-            `Utxo id for input at index [${i}] is inconsistent [expected ${expectedId} found ${actualInputId}]`,
-        );
-        return false;
-      }
-    }
-
-    return true;
   };
 }
 
