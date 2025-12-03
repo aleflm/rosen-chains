@@ -715,36 +715,6 @@ describe('FiroChain', () => {
     });
   });
 
-  describe('getTxSize', () => {
-    const network = createMockNetwork();
-
-    /**
-     * @target FiroChain.getTxSize should return transaction size in bytes
-     * @dependencies
-     * @scenario
-     * - mock PaymentTransaction
-     * - run test
-     * - check returned value
-     * @expected
-     * - it should return positive number
-     */
-    it('should return transaction size in bytes', async () => {
-      // mock PaymentTransaction
-      const paymentTx = FiroTransaction.fromJson(
-        transaction2PaymentTransaction,
-      );
-
-      // run test
-      const firoChain = await generateChainObject(network);
-      const result = firoChain.getTxSize(paymentTx);
-
-      // check returned value
-      expect(typeof result).toBe('number');
-      expect(result).toBeGreaterThan(0);
-      expect(result).toBe(133);
-    });
-  });
-
   describe('getBoxes', () => {
     const network = createMockNetwork();
 

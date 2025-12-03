@@ -333,7 +333,6 @@ class FiroChain extends AbstractUtxoChain<FiroTx, FiroUtxo> {
    * @param signingStatus the signing status of the transaction
    * @returns the validity status of the transaction
    */
-   
   isTxValid = async (
     transaction: PaymentTransaction,
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -587,6 +586,9 @@ class FiroChain extends AbstractUtxoChain<FiroTx, FiroUtxo> {
    * @param transaction the lock transaction
    * @param blockInfo the block info
    * @returns true if the transaction is verified
+   * @note Firo follows Bitcoin's approach and does not require timestamp validation
+   * for lock transactions. Unlike Ergo which validates box age, UTXO chains like
+   * Bitcoin and Firo rely on standard transaction validation only.
    */
   verifyLockTransactionExtraConditions = async (
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -613,16 +615,6 @@ class FiroChain extends AbstractUtxoChain<FiroTx, FiroUtxo> {
    */
   PaymentTransactionFromJson = (txJson: string): PaymentTransaction => {
     return FiroTransaction.fromJson(txJson);
-  };
-
-  /**
-   * gets the transaction size in bytes
-   * @param transaction the transaction
-   * @returns the transaction size
-   */
-  getTxSize = (transaction: PaymentTransaction): number => {
-    // TODO: Implement this method - placeholder for now
-    return transaction.txBytes.length;
   };
 
   /**
@@ -723,7 +715,7 @@ class FiroChain extends AbstractUtxoChain<FiroTx, FiroUtxo> {
   protected serializeTx = (tx: FiroTx): string => {
     return JsonBigInt.stringify(tx);
   };
-  
+
   /**
    * wraps firo amount
    * @param amount
