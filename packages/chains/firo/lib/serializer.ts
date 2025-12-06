@@ -1,4 +1,5 @@
 import { Psbt } from 'bitcoinjs-lib';
+import type * as bitcoin from 'bitcoinjs-lib';
 
 import { FIRO_NETWORK } from './constants';
 
@@ -15,10 +16,11 @@ class Serializer {
   /**
    * converts bytearray representation of the transaction to 'bitcoinjs-lib' PSBT format
    * @param txBytes bytearray representation of the transaction
+   * @param network optional network parameter (defaults to mainnet)
    * @returns the transaction in 'bitcoinjs-lib' PSBT format
    */
-  static deserialize = (txBytes: Uint8Array): Psbt => {
-    return Psbt.fromBuffer(Buffer.from(txBytes), { network: FIRO_NETWORK });
+  static deserialize = (txBytes: Uint8Array, network?: bitcoin.Network): Psbt => {
+    return Psbt.fromBuffer(Buffer.from(txBytes), { network: network || FIRO_NETWORK });
   };
 }
 

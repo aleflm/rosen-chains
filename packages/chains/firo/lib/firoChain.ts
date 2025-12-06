@@ -30,6 +30,8 @@ import {
   FIRO,
   MINIMUM_UTXO_VALUE,
   FIRO_NETWORK,
+  FIRO_TESTNET,
+  detectFiroNetwork,
   FIRO_INPUT_SIZE,
   FIRO_OUTPUT_SIZE,
   FIRO_TX_BASE_SIZE,
@@ -53,6 +55,7 @@ class FiroChain extends AbstractUtxoChain<FiroTx, FiroUtxo> {
   protected boxSelection: BitcoinBoxSelection;
   protected signFunction: TssSignFunction;
   protected lockScript: string;
+  protected firoNetwork: typeof FIRO_NETWORK | typeof FIRO_TESTNET;
 
   constructor(
     network: AbstractFiroNetwork,
@@ -60,9 +63,12 @@ class FiroChain extends AbstractUtxoChain<FiroTx, FiroUtxo> {
     tokens: TokenMap,
     signFunction: TssSignFunction,
     logger?: AbstractLogger,
+    extractor?: FiroRosenExtractor,
   ) {
     super(network, configs, tokens, logger);
-    this.extractor = new FiroRosenExtractor(
+    // Detect network from lock address
+    this.firoNetwork = detectFiroNetwork(configs.addresses.lock);
+    this.extractor = extractor || new FiroRosenExtractor(
       configs.addresses.lock,
       tokens,
       logger,
@@ -122,7 +128,7 @@ class FiroChain extends AbstractUtxoChain<FiroTx, FiroUtxo> {
     }
 
     const forbiddenBoxIds = unsignedTransactions.flatMap((paymentTx) => {
-      const inputs = Serializer.deserialize(paymentTx.txBytes).txInputs;
+      const inputs = Serializer.deserialize(paymentTx.txBytes, this.firoNetwork).txInputs;
       const ids: string[] = [];
       for (let i = 0; i < inputs.length; i++)
         ids.push(getPsbtTxInputBoxId(inputs[i]));
@@ -135,7 +141,7 @@ class FiroChain extends AbstractUtxoChain<FiroTx, FiroUtxo> {
     const finalizedSignedTransactions = serializedSignedTransactions.filter(
       (serializedTx) => {
         if (
-          isPsbtFinalized(Psbt.fromHex(serializedTx, { network: FIRO_NETWORK }))
+          isPsbtFinalized(Psbt.fromHex(serializedTx, { network: this.firoNetwork }))
         ) {
           return true;
         } else {
@@ -153,13 +159,13 @@ class FiroChain extends AbstractUtxoChain<FiroTx, FiroUtxo> {
     // Save the hex bytes of the signed transaction in case their utxos are going to be spent in this transaction
     const txToHex: Record<string, string> = {};
     for (const serializedTx of finalizedSignedTransactions) {
-      const psbt = Psbt.fromHex(serializedTx, { network: FIRO_NETWORK });
+      const psbt = Psbt.fromHex(serializedTx, { network: this.firoNetwork });
       const tx = psbt.extractTransaction(true);
       txToHex[tx.getId()] = tx.toHex();
     }
     const trackMap = this.getTransactionsBoxMapping(
       finalizedSignedTransactions.map((serializedTx) =>
-        Psbt.fromHex(serializedTx, { network: FIRO_NETWORK }),
+        Psbt.fromHex(serializedTx, { network: this.firoNetwork }),
       ),
       this.configs.addresses.lock,
     );
@@ -239,6 +245,9 @@ class FiroChain extends AbstractUtxoChain<FiroTx, FiroUtxo> {
         throw Error(
           'Firo does not support extra data or tokens in payment order',
         );
+        throw Error(
+          'Firo does not support extra data or tokens in payment order',
+        );
       }
       const orderFiro = this.unwrapFiro(order.assets.nativeToken).amount;
 
@@ -247,7 +256,7 @@ class FiroChain extends AbstractUtxoChain<FiroTx, FiroUtxo> {
 
       // create order output
       return {
-        script: address.toOutputScript(order.address, FIRO_NETWORK),
+        script: address.toOutputScript(order.address, this.firoNetwork),
         value: Number(orderFiro),
       };
     });
@@ -261,7 +270,7 @@ class FiroChain extends AbstractUtxoChain<FiroTx, FiroUtxo> {
     remainingFiro -= estimatedFee;
 
     // Create PSBT
-    const psbt = new Psbt({ network: FIRO_NETWORK });
+    const psbt = new Psbt({ network: this.firoNetwork });
 
     // Add inputs to PSBT
     for (const input of txInputs) {
@@ -275,7 +284,7 @@ class FiroChain extends AbstractUtxoChain<FiroTx, FiroUtxo> {
     // Add outputs to PSBT
     for (const output of txOutputs) {
       psbt.addOutput({
-        address: address.fromOutputScript(output.script, FIRO_NETWORK),
+        address: address.fromOutputScript(output.script, this.firoNetwork),
         value: output.value,
       });
     }
@@ -348,7 +357,7 @@ class FiroChain extends AbstractUtxoChain<FiroTx, FiroUtxo> {
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     signingStatus: SigningStatus = SigningStatus.Signed,
   ): Promise<ValidityStatus> => {
-    const psbt = Serializer.deserialize(transaction.txBytes);
+    const psbt = Serializer.deserialize(transaction.txBytes, this.firoNetwork);
     const tx = Transaction.fromBuffer(psbt.data.getTransaction());
     for (let i = 0; i < tx.ins.length; i++) {
       const input = tx.ins[i];
@@ -378,7 +387,7 @@ class FiroChain extends AbstractUtxoChain<FiroTx, FiroUtxo> {
    * @returns the transaction payment order (list of single payments)
    */
   extractTransactionOrder = (transaction: PaymentTransaction): PaymentOrder => {
-    const tx = Serializer.deserialize(transaction.txBytes);
+    const tx = Serializer.deserialize(transaction.txBytes, this.firoNetwork);
 
     const order: PaymentOrder = [];
     for (let i = 0; i < tx.txOutputs.length; i++) {
@@ -392,7 +401,7 @@ class FiroChain extends AbstractUtxoChain<FiroTx, FiroUtxo> {
         continue;
 
       const payment: SinglePayment = {
-        address: address.fromOutputScript(output.script, FIRO_NETWORK),
+        address: address.fromOutputScript(output.script, this.firoNetwork),
         assets: {
           nativeToken: this.wrapFiro(BigInt(output.value)).amount,
           tokens: [],
@@ -411,7 +420,7 @@ class FiroChain extends AbstractUtxoChain<FiroTx, FiroUtxo> {
   verifyTransactionFee = async (
     transaction: PaymentTransaction,
   ): Promise<boolean> => {
-    const psbt = Serializer.deserialize(transaction.txBytes);
+    const psbt = Serializer.deserialize(transaction.txBytes, this.firoNetwork);
     const tx = Transaction.fromBuffer(psbt.data.getTransaction());
     const firoTx = transaction as FiroTransaction;
 
@@ -466,7 +475,7 @@ class FiroChain extends AbstractUtxoChain<FiroTx, FiroUtxo> {
   submitTransaction = async (
     transaction: PaymentTransaction,
   ): Promise<void> => {
-    const psbt = Serializer.deserialize(transaction.txBytes);
+    const psbt = Serializer.deserialize(transaction.txBytes, this.firoNetwork);
     return this.network.submitTransaction(psbt);
   };
 
@@ -498,7 +507,7 @@ class FiroChain extends AbstractUtxoChain<FiroTx, FiroUtxo> {
   signTransaction = async (
     transaction: PaymentTransaction,
   ): Promise<PaymentTransaction> => {
-    const psbt = Serializer.deserialize(transaction.txBytes);
+    const psbt = Serializer.deserialize(transaction.txBytes, this.firoNetwork);
     const tx = Transaction.fromBuffer(psbt.data.getTransaction());
     const firoTx = transaction as FiroTransaction;
 
@@ -576,7 +585,7 @@ class FiroChain extends AbstractUtxoChain<FiroTx, FiroUtxo> {
   verifyTransactionExtraConditions = (
     transaction: PaymentTransaction,
   ): boolean => {
-    const tx = Serializer.deserialize(transaction.txBytes);
+    const tx = Serializer.deserialize(transaction.txBytes, this.firoNetwork);
 
     // check change box
     const changeBoxIndex = tx.txOutputs.length - 1;
@@ -629,10 +638,17 @@ class FiroChain extends AbstractUtxoChain<FiroTx, FiroUtxo> {
 
   /**
    * gets valid boxes for an address
+   * gets valid boxes for an address
    * @param address the address
+   * @param _tokenId the token id (unused - Firo has no tokens)
    * @param _tokenId the token id (unused - Firo has no tokens)
    * @returns the list of valid boxes
    */
+  getBoxes = async (
+    address: string,
+    _tokenId?: string,
+  ): Promise<FiroUtxo[]> => {
+    void _tokenId; // Explicitly mark as intentionally unused
   getBoxes = async (
     address: string,
     _tokenId?: string,
@@ -649,7 +665,7 @@ class FiroChain extends AbstractUtxoChain<FiroTx, FiroUtxo> {
   rawTxToPaymentTransaction = async (
     psbtHex: string,
   ): Promise<PaymentTransaction> => {
-    const tx = Psbt.fromHex(psbtHex, { network: FIRO_NETWORK });
+    const tx = Psbt.fromHex(psbtHex, { network: this.firoNetwork });
     const txBytes = Serializer.serialize(tx);
     const txId = Transaction.fromBuffer(tx.data.getTransaction()).getId();
 
@@ -681,7 +697,7 @@ class FiroChain extends AbstractUtxoChain<FiroTx, FiroUtxo> {
   verifyPaymentTransaction = async (
     transaction: PaymentTransaction,
   ): Promise<boolean> => {
-    const psbt = Serializer.deserialize(transaction.txBytes);
+    const psbt = Serializer.deserialize(transaction.txBytes, this.firoNetwork);
     const firoTx = transaction as FiroTransaction;
     const baseError = `Tx [${transaction.txId}] is not verified: `;
 
@@ -761,7 +777,7 @@ class FiroChain extends AbstractUtxoChain<FiroTx, FiroUtxo> {
     txBytes: Uint8Array,
     signatures: string[],
   ): Psbt => {
-    const psbt = Serializer.deserialize(txBytes);
+    const psbt = Serializer.deserialize(txBytes, this.firoNetwork);
     for (let i = 0; i < signatures.length; i++) {
       const signature = Buffer.from(signatures[i], 'hex');
       psbt.updateInput(i, {
