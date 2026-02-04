@@ -3,8 +3,7 @@ import { AbstractLogger } from '@rosen-bridge/abstract-logger';
 import { FiroConfigs } from '../lib/types';
 import { Psbt } from 'bitcoinjs-lib';
 import { FIRO_NETWORK } from '../lib/constants';
-import { AbstractFiroNetwork } from '../lib';
-import { TokenMap } from '@rosen-bridge/tokens';
+import { TokenMap, RosenTokens } from '@rosen-bridge/tokens';
 
 export const testFiroConfigs: FiroConfigs = {
   fee: 1000n,
@@ -18,7 +17,6 @@ export const testFiroConfigs: FiroConfigs = {
   addresses: {
     lock: 'aD5CwCytFCw8AE76rDiAKQqHghNatNLU4X',
     cold: 'aLp9d4hLZzpF2wec2HrQNGme62Aqf85pvd',
-    fee: 'aNPNU9gLXPpvrnBtuPRpxgfsd2PWz6Lorx',
     permit: 'a4xfC8Ci6hBPW6Huuzjzvw86rBjgnsLseP',
     fraud: 'a5DaG9nwf1Hj6dpyShX8YqEgFzqs5HFEKR',
   },
@@ -316,6 +314,9 @@ export const createMockTokenMap = () => {
 
   return tokenMap;
 };
+
+export const testTokenMapRosen: RosenTokens = [];
+export const testTokenMap = createMockTokenMap();
 
 // Factory function to create mock logger
 export const createMockLogger = (): AbstractLogger => {

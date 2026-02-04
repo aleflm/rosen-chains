@@ -7,7 +7,7 @@ import { TransactionType,
   NotEnoughAssetsError,
   NotEnoughValidBoxesError
 } from '@rosen-chains/abstract-chain';
-import { FiroChain, FiroTransaction, AbstractFiroNetwork } from '../lib';
+import { FiroChain, FiroTransaction } from '../lib';
 import {
   testFiroConfigs,
   createMockNetwork,
