@@ -6,13 +6,6 @@ import {
 export interface FiroConfigs extends ChainConfigs {
   aggregatedPublicKey: string;
   txFeeSlippage: number;
-  addresses: {
-    lock: string;
-    cold: string;
-    fee: string;
-    permit: string;
-    fraud: string;
-  };
 }
 
 export interface FiroTransactionJsonModel extends PaymentTransactionJsonModel {
@@ -61,11 +54,6 @@ export interface CoveringBoxes<BoxType> {
   covered: boolean;
   boxes: Array<BoxType>;
 }
-
-export type TssSignFunction = (txHash: Uint8Array) => Promise<{
-  signature: string;
-  signatureRecovery: string;
-}>;
 
 export enum FiroNetworkFunction {
   // AbstractChainNetwork functions

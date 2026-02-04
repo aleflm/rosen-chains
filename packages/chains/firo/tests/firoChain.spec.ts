@@ -1,9 +1,13 @@
 import { expect, describe, it, vi } from 'vitest';
+import { randomBytes } from 'crypto';
 import JsonBigInt from '@rosen-bridge/json-bigint';
-import { TokenMap } from '@rosen-bridge/tokens';
-import { TransactionType, SigningStatus, NotEnoughAssetsError, NotEnoughValidBoxesError } from '@rosen-chains/abstract-chain';
-
-import { FiroChain, FiroTransaction, TssSignFunction } from '../lib';
+import { TransactionType, 
+  EcdsaSignMediator,
+  SigningStatus,
+  NotEnoughAssetsError,
+  NotEnoughValidBoxesError
+} from '@rosen-chains/abstract-chain';
+import { FiroChain, FiroTransaction, AbstractFiroNetwork } from '../lib';
 import {
   testFiroConfigs,
   createMockNetwork,
@@ -13,28 +17,38 @@ import {
   transactionSignedPaymentTransaction,
   testUtxos,
   transaction2Order,
-  largeTestUtxos,
-  createMockNetworkForTransactionGeneration,
-} from './chainMockTestData';
+  largeTestUtxos
+} from './chainTestData';
+import TestFiroNetwork from './network/testFiroNetwork';
+import { generateChainObject } from './firoTestUtils';
+import Serializer from '../lib/serializer';
 
-const generateRandomId = (): string => require('crypto').randomBytes(32).toString('hex');
+const generateRandomId = (): string =>
+  randomBytes(32).toString('hex');
 
-const mockedSignFn: TssSignFunction = () =>
-  Promise.resolve({
+const mockedSignMediator: EcdsaSignMediator = {
+  isInSign: async () => false,
+
+  sign: async () => ({
     signature: '',
     signatureRecovery: '',
-  });
-
-const generateChainObject = async (network: any) => {
-  const tokenMap = createMockTokenMap();
-  const logger = createMockLogger();
-  return new FiroChain(network, testFiroConfigs, tokenMap, mockedSignFn, logger);
+  }),
 };
 
-describe('FiroChain', () => {
-  describe('generateMultipleTransactions', () => {
-    const network = createMockNetworkForTransactionGeneration();
+// const generateChainObject = async (network: AbstractFiroNetwork) => {
+//   const tokenMap = createMockTokenMap();
+//   const logger = createMockLogger();
+//   return new FiroChain(network, testFiroConfigs, tokenMap, mockedSignMediator, logger);
+// };
 
+describe('FiroChain', () => {
+ describe('generateMultipleTransactions', () => {
+    const network = new TestFiroNetwork();
+    network.getHeight = vi.fn().mockResolvedValue(123);
+    network.getAddressAssets = vi.fn().mockResolvedValue({
+      nativeToken: 100000000n,
+      tokens:[],
+    });
     /**
      * @target FiroChain.generateMultipleTransactions should generate payment
      * transaction successfully
@@ -60,11 +74,13 @@ describe('FiroChain', () => {
 
       // mock getCoveringBoxes, hasLockAddressEnoughAssets
       const firoChain = await generateChainObject(network);
-      const getCovBoxesSpy = vi.spyOn(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (firoChain as any).boxSelection,
-        'getCoveringBoxes',
-      );
+      const boxSelection = (firoChain as unknown as {
+        boxSelection: {
+          getCoveringBoxes: (...args: unknown[]) => Promise<unknown>;
+        };
+      }).boxSelection;
+
+      const getCovBoxesSpy = vi.spyOn(boxSelection,'getCoveringBoxes');
       getCovBoxesSpy.mockResolvedValue({
         covered: true,
         boxes: largeTestUtxos,
@@ -100,7 +116,7 @@ describe('FiroChain', () => {
       // getCoveringBoxes should have been called with correct arguments
       const expectedRequiredAssets = structuredClone(transaction2Order[0].assets);
       expectedRequiredAssets.nativeToken += firoChain.getMinimumNativeToken();
-      expect(getCovBoxesSpy).toHaveBeenCalledWith(
+      expect(getCovBoxesSpy).toHaveBeenCalledExactlyOnceWith(
         expectedRequiredAssets,
         [],
         new Map(),
@@ -160,11 +176,12 @@ describe('FiroChain', () => {
     it('should throw error when bank boxes cannot cover order assets', async () => {
       // mock getCoveringBoxes to return covered: false
       const firoChain = await generateChainObject(network);
-      const getCovBoxesSpy = vi.spyOn(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (firoChain as any).boxSelection,
-        'getCoveringBoxes',
-      );
+      const boxSelection = (firoChain as unknown as {
+        boxSelection: {
+          getCoveringBoxes: (...args: unknown[]) => Promise<unknown>;
+        };
+      }).boxSelection;
+      const getCovBoxesSpy = vi.spyOn(boxSelection, 'getCoveringBoxes');
       getCovBoxesSpy.mockResolvedValue({
         covered: false,
         boxes: [],
@@ -214,11 +231,12 @@ describe('FiroChain', () => {
 
       // mock getCoveringBoxes
       const firoChain = await generateChainObject(network);
-      const getCovBoxesSpy = vi.spyOn(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (firoChain as any).boxSelection,
-        'getCoveringBoxes',
-      );
+      const boxSelection = (firoChain as unknown as {
+        boxSelection: {
+          getCoveringBoxes: (...args: unknown[]) => Promise<unknown>;
+        };
+      }).boxSelection;
+      const getCovBoxesSpy = vi.spyOn(boxSelection, 'getCoveringBoxes');
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       getCovBoxesSpy.mockImplementation(async (...args: any[]) => {
         const forbiddenBoxIds = args[1] as Array<string>;
@@ -580,8 +598,6 @@ describe('FiroChain', () => {
         transaction2PaymentTransaction,
       );
       
-      const Serializer = require('../lib/serializer').default;
-      const originalDeserialize = Serializer.deserialize;
       
       // Mock Serializer to return transaction with invalid change box
       const mockTx = {
@@ -682,7 +698,7 @@ describe('FiroChain', () => {
       const result = await firoChain.isTxInMempool(txId);
 
       expect(result).toEqual(true);
-      expect(network.isTxInMempool).toHaveBeenCalledWith(txId);
+      expect(network.isTxInMempool).toHaveBeenCalledExactlyOnceWith(txId);
     });
   });
 
@@ -739,7 +755,7 @@ describe('FiroChain', () => {
       // check returned value
       expect(Array.isArray(result)).toBe(true);
       expect(result).toEqual(testUtxos);
-      expect(network.getAddressBoxes).toHaveBeenCalledWith(address, 0, expect.any(Number));
+      expect(network.getAddressBoxes).toHaveBeenCalledExactlyOnceWith(address, 0, expect.any(Number));
     });
   });
 
@@ -930,6 +946,7 @@ describe('FiroChain', () => {
 
         // run test
         const firoChain = await generateChainObject(network);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const result = (firoChain as any).serializeTx(realTx);
 
         // check returned value
@@ -965,6 +982,7 @@ describe('FiroChain', () => {
 
         // run test
         const firoChain = await generateChainObject(network);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const result = (firoChain as any).wrapFiro(amount);
 
         // check returned value
@@ -978,6 +996,7 @@ describe('FiroChain', () => {
 
         // run test
         const firoChain = await generateChainObject(network);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const result = (firoChain as any).wrapFiro(amount);
 
         // check returned value
@@ -991,6 +1010,7 @@ describe('FiroChain', () => {
 
         // run test
         const firoChain = await generateChainObject(network);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const result = (firoChain as any).wrapFiro(amount);
 
         // check returned value
@@ -1005,6 +1025,7 @@ describe('FiroChain', () => {
 
         // run test
         const firoChain = await generateChainObject(network);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const result = (firoChain as any).wrapFiro(amount);
 
         // check returned value
@@ -1031,6 +1052,7 @@ describe('FiroChain', () => {
 
         // run test
         const firoChain = await generateChainObject(network);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const result = (firoChain as any).unwrapFiro(amount);
 
         // check returned value
@@ -1044,6 +1066,7 @@ describe('FiroChain', () => {
 
         // run test
         const firoChain = await generateChainObject(network);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const result = (firoChain as any).unwrapFiro(amount);
 
         // check returned value
@@ -1057,6 +1080,7 @@ describe('FiroChain', () => {
 
         // run test
         const firoChain = await generateChainObject(network);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const result = (firoChain as any).unwrapFiro(amount);
 
         // check returned value
@@ -1087,6 +1111,7 @@ describe('FiroChain', () => {
 
         // run test
         const firoChain = await generateChainObject(network);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const result = (firoChain as any).getBoxId(box);
 
         // check returned value
@@ -1104,6 +1129,7 @@ describe('FiroChain', () => {
 
         // run test
         const firoChain = await generateChainObject(network);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const result = (firoChain as any).getBoxId(box);
 
         // check returned value
@@ -1129,6 +1155,7 @@ describe('FiroChain', () => {
 
         // run test
         const firoChain = await generateChainObject(network);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const result = (firoChain as any).buildSignedTransaction(paymentTx.txBytes, signatures);
 
         // check returned value
@@ -1145,6 +1172,7 @@ describe('FiroChain', () => {
 
         // run test
         const firoChain = await generateChainObject(network);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const result = (firoChain as any).buildSignedTransaction(paymentTx.txBytes, signatures);
 
         // check returned value
@@ -1165,11 +1193,13 @@ describe('FiroChain', () => {
        * - it should return Map object
        */
       it('should return empty map for empty transaction list', async () => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const transactions: any[] = [];
         const address = 'test-address';
 
         // run test
         const firoChain = await generateChainObject(network);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const result = (firoChain as any).getTransactionsBoxMapping(transactions, address);
 
         // check returned value
@@ -1178,11 +1208,13 @@ describe('FiroChain', () => {
       });
 
       it('should handle address parameter correctly', async () => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const transactions: any[] = [];
         const address = testFiroConfigs.addresses.lock;
 
         // run test
         const firoChain = await generateChainObject(network);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const result = (firoChain as any).getTransactionsBoxMapping(transactions, address);
 
         // check returned value
@@ -1221,7 +1253,7 @@ describe('FiroChain', () => {
 
       // check that network method is called
       expect(network.submitTransaction).toHaveBeenCalledTimes(1);
-      expect(network.submitTransaction).toHaveBeenCalledWith(expect.any(Object));
+      expect(network.submitTransaction).toHaveBeenCalledExactlyOnceWith(expect.any(Object));
     });
 
     /**
@@ -1269,13 +1301,18 @@ describe('FiroChain', () => {
      */
     it('should call signing function for each input', async () => {
       let signCallCount = 0;
-      const testSignFunction: TssSignFunction = async (hash: Uint8Array) => {
-        signCallCount++;
-        return {
-          signature: '1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
-          signatureRecovery: '',
-        };
-      };
+      const testEcdsaSignMediator: EcdsaSignMediator = {
+        isInSign: async () => false,
+
+        sign: async () => {
+          signCallCount++;
+          return {
+            signature:
+              '1234567890abcdef'.repeat(8),
+            signatureRecovery: '1',
+          };
+        },
+    };
 
       // mock PaymentTransaction of unsigned transaction
       const paymentTx = FiroTransaction.fromJson(
@@ -1285,11 +1322,11 @@ describe('FiroChain', () => {
       // run test
       const tokenMap = createMockTokenMap();
       const logger = createMockLogger();
-      const firoChain = new FiroChain(network, testFiroConfigs, tokenMap, testSignFunction, logger);
+      const firoChain = new FiroChain(network, testFiroConfigs, tokenMap, testEcdsaSignMediator, logger);
       
       try {
         await firoChain.signTransaction(paymentTx);
-      } catch (error) {
+      } catch {
         // Expected to fail during finalization due to mock signatures
       }
 
@@ -1310,8 +1347,12 @@ describe('FiroChain', () => {
      */
     it('should throw error when at least signing of one message is failed', async () => {
       // mock a sign function to throw error
-      const failingSignFunction: TssSignFunction = async () => {
-        throw new Error('TestError: sign failed');
+      const failingEcdsaSignMediator: EcdsaSignMediator = {
+        isInSign: async () => false,
+
+        sign: async () => {
+          throw new Error('TestError: sign failed');
+        },
       };
 
       // mock PaymentTransaction of unsigned transaction
@@ -1322,7 +1363,7 @@ describe('FiroChain', () => {
       // run test
       const tokenMap = createMockTokenMap();
       const logger = createMockLogger();
-      const firoChain = new FiroChain(network, testFiroConfigs, tokenMap, failingSignFunction, logger);
+      const firoChain = new FiroChain(network, testFiroConfigs, tokenMap, failingEcdsaSignMediator, logger);
 
       await expect(async () => {
         await firoChain.signTransaction(paymentTx);
@@ -1346,6 +1387,7 @@ describe('FiroChain', () => {
     it('should always return true as there are no extra conditions for Firo', async () => {
       // mock transaction and block info
       const mockTx = {
+        id: 'fake-id',
         txId: 'test-tx-id',
         inputs: [],
         outputs: [],
@@ -1378,6 +1420,7 @@ describe('FiroChain', () => {
     it('should handle null parameters', async () => {
       // run test
       const firoChain = await generateChainObject(network);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const result = await firoChain.verifyLockTransactionExtraConditions(null as any, null as any);
 
       // check returned value

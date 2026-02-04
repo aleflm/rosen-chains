@@ -15,7 +15,7 @@ import {
   edgeCaseData,
   expectedHexValues,
   malformedJsonData,
-} from './transactionMockTestData';
+} from './transactionTestData';
 
 describe('FiroTransaction', () => {
   describe('Constructor', () => {

@@ -13,6 +13,7 @@ import {
   AbstractUtxoChain,
   BlockInfo,
   ChainUtils,
+  EcdsaSignMediator,
   GET_BOX_API_LIMIT,
   NotEnoughAssetsError,
   NotEnoughValidBoxesError,
@@ -42,7 +43,7 @@ import {
 } from './firoUtils';
 import AbstractFiroNetwork from './network/abstractFiroNetwork';
 import Serializer from './serializer';
-import { FiroConfigs, FiroTx, FiroUtxo, TssSignFunction } from './types';
+import { FiroConfigs, FiroTx, FiroUtxo } from './types';
 
 class FiroChain extends AbstractUtxoChain<FiroTx, FiroUtxo> {
   declare network: AbstractFiroNetwork;
@@ -51,14 +52,14 @@ class FiroChain extends AbstractUtxoChain<FiroTx, FiroUtxo> {
   NATIVE_TOKEN_ID = FIRO;
   extractor: FiroRosenExtractor;
   protected boxSelection: BitcoinBoxSelection;
-  protected signFunction: TssSignFunction;
+  protected signMediator: EcdsaSignMediator;
   protected lockScript: string;
 
   constructor(
     network: AbstractFiroNetwork,
     configs: FiroConfigs,
     tokens: TokenMap,
-    signFunction: TssSignFunction,
+    signMediator: EcdsaSignMediator,
     logger?: AbstractLogger,
   ) {
     super(network, configs, tokens, logger);
@@ -67,7 +68,7 @@ class FiroChain extends AbstractUtxoChain<FiroTx, FiroUtxo> {
       tokens,
       logger,
     );
-    this.signFunction = signFunction;
+    this.signMediator = signMediator;
     try {
       this.lockScript = address
         .toOutputScript(this.configs.addresses.lock, FIRO_NETWORK)
@@ -510,12 +511,14 @@ class FiroChain extends AbstractUtxoChain<FiroTx, FiroUtxo> {
         Transaction.SIGHASH_ALL,
       );
 
-      const signatureHex = this.signFunction(signMessage).then((response) => {
-        this.logger.debug(
-          `Input [${i}] of tx [${firoTx.txId}] is signed. signature: ${response.signature}`,
-        );
-        return response.signature;
-      });
+      const signatureHex = this.signMediator
+        .sign(signMessage)
+        .then((response) => {
+          this.logger.debug(
+            `Input [${i}] of tx [${firoTx.txId}] is signed. signature: ${response.signature}`,
+          );
+          return response.signature;
+        });
       signaturePromises.push(signatureHex);
     }
 
@@ -536,6 +539,19 @@ class FiroChain extends AbstractUtxoChain<FiroTx, FiroUtxo> {
         firoTx.inputUtxos,
       );
     });
+  };
+
+  /**
+   * checks if the corresponding signer service is signing the transaction or not
+   * @param transaction the transaction
+   * @returns true if the signer is still signing at least one input, otherwise false
+   */
+  isTransactionInSign = async (
+    transaction: PaymentTransaction,
+  ): Promise<boolean> => {
+    return this.signMediator.isInSign(
+      Buffer.from(transaction.txId, 'hex')
+    );
   };
 
   /**

@@ -1,6 +1,6 @@
 {
   "name": "@rosen-chains/firo-rpc",
-  "version": "0.0.1",
+  "version": "0.0.0",
   "description": "A package to be used as network api provider for @rosen-chains/firo package using RPC API",
   "keywords": [
     "rosen"
@@ -35,7 +35,7 @@
     "@rosen-bridge/abstract-logger": "^3.0.1",
     "@rosen-bridge/json-bigint": "^1.1.0",
     "@rosen-chains/abstract-chain": "^15.0.1",
-    "@rosen-chains/firo": "^0.0.1",
+    "@rosen-chains/firo": "^0.0.0",
     "@rosen-clients/rate-limited-axios": "^1.1.0",
     "bitcoinjs-lib": "^6.1.5"
   },
